@@ -254,6 +254,10 @@ yandex_mdb_mysql_user.vadim: Creation complete after 18s [id=c9qrk54kqcni12q1nep
 Apply complete! Resources: 6 added, 0 changed, 0 destroyed.
 user@microk8s:~/clopro-homeworks-4$ 
 ```
+![image](https://github.com/user-attachments/assets/a32e5ea1-e6fc-48d3-aa2a-170f6b6532b4)
+![image](https://github.com/user-attachments/assets/92606282-9c1c-4c41-97f4-78fd673ac45b)
+![image](https://github.com/user-attachments/assets/7e013eef-e7b1-48be-95d4-f177ad1824e0)
+
 
 2. Настроить с помощью Terraform кластер Kubernetes.
 
