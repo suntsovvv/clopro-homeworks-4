@@ -51,6 +51,7 @@ resource "yandex_mdb_mysql_cluster" "test_cluster" {
     zone      = "ru-central1-b"
     subnet_id = yandex_vpc_subnet.private_b.id
   }
+ deletion_protection = true
 }
 
 resource "yandex_vpc_network" "VPC" {
