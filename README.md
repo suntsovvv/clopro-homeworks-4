@@ -263,29 +263,311 @@ user@microk8s:~/clopro-homeworks-4$
 2. Настроить с помощью Terraform кластер Kubernetes.
 
  - Используя настройки VPC из предыдущих домашних заданий, добавить дополнительно две подсети public в разных зонах, чтобы обеспечить отказоустойчивость.
+ ```hcl
+ resource "yandex_vpc_subnet" "public_a" {
+  zone           = "ru-central1-a"
+  network_id     = yandex_vpc_network.VPC.id
+  v4_cidr_blocks = ["10.0.1.0/24"]
+}
+
+resource "yandex_vpc_subnet" "public_b" {
+  zone           = "ru-central1-b"
+  network_id     = yandex_vpc_network.VPC.id
+  v4_cidr_blocks = ["10.0.2.0/24"]
+}
+resource "yandex_vpc_subnet" "public_d" {
+  zone           = "ru-central1-d"
+  network_id     = yandex_vpc_network.VPC.id
+  v4_cidr_blocks = ["10.0.3.0/24"]
+}
+```
  - Создать отдельный сервис-аккаунт с необходимыми правами. 
+ ```hcl
+ # Сервисный аккаунт 
+resource "yandex_iam_service_account" "k8s" {
+  name        = "k8s"
+}
+
+#Назначение роли для сервисного аккаунта
+resource "yandex_resourcemanager_folder_iam_member" "editor" {
+  folder_id = var.folder_id
+  role      = "editor"
+  member    = "serviceAccount:${yandex_iam_service_account.k8s.id}"
+}
+#Создание статического ключа доступа
+resource "yandex_iam_service_account_static_access_key" "k8s-key" {
+  service_account_id = yandex_iam_service_account.k8s.id
+  description        = "static access key for object storage"
+}
+```
  - Создать региональный мастер Kubernetes с размещением нод в трёх разных подсетях.
  - Добавить возможность шифрования ключом из KMS, созданным в предыдущем домашнем задании.
+ ```hcl
+ # Создание ключа для шифрования
+resource "yandex_kms_symmetric_key" "encryptkey" {
+  name              = "encryptkey"
+  default_algorithm = "AES_256"
+  rotation_period   = "8760h"
+}
+# Создание регионального кластера k8s
+resource "yandex_kubernetes_cluster" "regional_k8s" {
+  name        = "regional_k8s"
+
+  network_id = yandex_vpc_network.VPC.id
+
+  master {
+    regional {
+      region = "ru-central1"
+
+      location {
+        zone      = yandex_vpc_subnet.public_a.zone
+        subnet_id = yandex_vpc_subnet.public_a.id
+      }
+
+      location {
+        zone      = yandex_vpc_subnet.public_b.zone
+        subnet_id = yandex_vpc_subnet.public_b.id
+      }
+
+      location {
+        zone      = yandex_vpc_subnet.public_d.zone
+        subnet_id = yandex_vpc_subnet.public_d.id
+      }
+    }
+   
+    version   = "1.14"
+    public_ip = true
+
+    # maintenance_policy {
+    #   auto_upgrade = true
+
+    #   maintenance_window {
+    #     day        = "monday"
+    #     start_time = "15:00"
+    #     duration   = "3h"
+    #   }
+
+    #   maintenance_window {
+    #     day        = "friday"
+    #     start_time = "10:00"
+    #     duration   = "4h30m"
+    #   }
+    # }
+
+    # master_logging {
+    #   enabled                    = true
+    #   folder_id                  = data.yandex_resourcemanager_folder.folder_resource_name.id
+    #   kube_apiserver_enabled     = true
+    #   cluster_autoscaler_enabled = true
+    #   events_enabled             = true
+    #   audit_enabled              = true
+    # }
+  }
+
+  service_account_id      = yandex_iam_service_account.k8s.id
+  node_service_account_id = yandex_iam_service_account.k8s.id
+kms_provider {
+  key_id = yandex_kms_symmetric_key.encryptkey.id
+}
+  # labels = {
+  #   my_key       = "my_value"
+  #   my_other_key = "my_other_value"
+  # }
+
+  release_channel = "STABLE"
+}
+```
  - Создать группу узлов, состояющую из трёх машин с автомасштабированием до шести.
+ ```hcl
+
+ resource "yandex_kubernetes_node_group" "k8s-node-group-a" {
+  cluster_id  = yandex_kubernetes_cluster.regional-k8s.id
+  name        = "k8s-node-group-a"
+
+  version     = "1.30"
+
+  labels = {
+    "key" = "k8s-node-group-a"
+  }
+
+  instance_template {
+    platform_id = "standard-v2"
+
+    network_interface {
+      nat        = true
+      subnet_ids = ["${yandex_vpc_subnet.public_a.id}"]
+       }
+
+    resources {
+      memory = 2
+      cores  = 2
+    }
+
+    boot_disk {
+      type = "network-hdd"
+      size = 64
+    }
+
+    scheduling_policy {
+      preemptible = true
+    }
+
+    container_runtime {
+      type = "containerd"
+    }
+      metadata = {
+        ssh-keys  = "ubuntu:${var.ssh_public_key_path}"
+    }
+  }
+
+  scale_policy {
+    auto_scale {
+      initial = 3
+      min = 3
+      max = 6
+    }
+  }
+
+  allocation_policy {
+    location {
+      zone = "ru-central1-a"
+ 
+    }
+    
+  }
+}
+ ```
+ Применил и проверяю:
+ ```bash
+ user@microk8s:~/clopro-homeworks-4$ yc managed-kubernetes cluster list
++----------------------+--------------+---------------------+---------+---------+------------------------+-------------------+
+|          ID          |     NAME     |     CREATED AT      | HEALTH  | STATUS  |   EXTERNAL ENDPOINT    | INTERNAL ENDPOINT |
++----------------------+--------------+---------------------+---------+---------+------------------------+-------------------+
+| catngd4f46pfu88q3ut3 | regional-k8s | 2024-12-13 08:17:24 | HEALTHY | RUNNING | https://130.193.58.110 | https://10.0.1.5  |
++----------------------+--------------+---------------------+---------+---------+------------------------+-------------------+
+
+There is a new yc version '0.140.0' available. Current version: '0.139.0'.
+See release notes at https://yandex.cloud/ru/docs/cli/release-notes
+You can install it by running the following command in your shell:
+        $ yc components update
+```
  - Подключиться к кластеру с помощью `kubectl`.
+```bash
+
+user@microk8s:~/clopro-homeworks-4$ yc managed-kubernetes cluster get-credentials catngd4f46pfu88q3ut3 --external
+
+Context 'yc-regional-k8s' was added as default to kubeconfig '/home/user/.kube/config'.
+Check connection to cluster using 'kubectl cluster-info --kubeconfig /home/user/.kube/config'.
+
+Note, that authentication depends on 'yc' and its config profile 'default'.
+To access clusters using the Kubernetes API, please use Kubernetes Service Account.
+user@microk8s:~/clopro-homeworks-4$ kubectl cluster-info 
+Kubernetes control plane is running at https://130.193.58.110
+CoreDNS is running at https://130.193.58.110/api/v1/namespaces/kube-system/services/kube-dns:dns/proxy
+user@microk8s:~/clopro-homeworks-4$ kubectl get all -A
+NAMESPACE     NAME                                       READY   STATUS    RESTARTS   AGE
+kube-system   pod/coredns-577d65f588-kr4pv               1/1     Running   0          3h19m
+kube-system   pod/coredns-577d65f588-pd4dd               1/1     Running   0          19m
+kube-system   pod/ip-masq-agent-5tb5l                    1/1     Running   0          19m
+kube-system   pod/ip-masq-agent-7qflw                    1/1     Running   0          19m
+kube-system   pod/ip-masq-agent-nrpqz                    1/1     Running   0          19m
+kube-system   pod/kube-dns-autoscaler-697d688488-q2xqk   1/1     Running   0          3h19m
+kube-system   pod/kube-proxy-dlbzf                       1/1     Running   0          19m
+kube-system   pod/kube-proxy-rwwfd                       1/1     Running   0          19m
+kube-system   pod/kube-proxy-wcscg                       1/1     Running   0          19m
+kube-system   pod/metrics-server-9f7b47c55-66wjh         2/2     Running   0          19m
+kube-system   pod/npd-v0.8.0-q5zq9                       1/1     Running   0          19m
+kube-system   pod/npd-v0.8.0-qn9np                       1/1     Running   0          19m
+kube-system   pod/npd-v0.8.0-tblr9                       1/1     Running   0          19m
+kube-system   pod/yc-disk-csi-node-v2-4pfwp              6/6     Running   0          19m
+kube-system   pod/yc-disk-csi-node-v2-6vpj5              6/6     Running   0          19m
+kube-system   pod/yc-disk-csi-node-v2-xs9tk              6/6     Running   0          19m
+
+NAMESPACE     NAME                     TYPE        CLUSTER-IP     EXTERNAL-IP   PORT(S)                  AGE
+default       service/kubernetes       ClusterIP   10.96.128.1    <none>        443/TCP                  3h19m
+kube-system   service/kube-dns         ClusterIP   10.96.128.2    <none>        53/UDP,53/TCP,9153/TCP   3h19m
+kube-system   service/metrics-server   ClusterIP   10.96.229.64   <none>        443/TCP                  3h19m
+
+NAMESPACE     NAME                                            DESIRED   CURRENT   READY   UP-TO-DATE   AVAILABLE   NODE SELECTOR                                                                        AGE
+kube-system   daemonset.apps/ip-masq-agent                    3         3         3       3            3           beta.kubernetes.io/os=linux,node.kubernetes.io/masq-agent-ds-ready=true              3h19m
+kube-system   daemonset.apps/kube-proxy                       3         3         3       3            3           kubernetes.io/os=linux,node.kubernetes.io/kube-proxy-ds-ready=true                   3h19m
+kube-system   daemonset.apps/npd-v0.8.0                       3         3         3       3            3           beta.kubernetes.io/os=linux,node.kubernetes.io/node-problem-detector-ds-ready=true   3h19m
+kube-system   daemonset.apps/nvidia-device-plugin-daemonset   0         0         0       0            0           beta.kubernetes.io/os=linux,node.kubernetes.io/nvidia-device-plugin-ds-ready=true    3h19m
+kube-system   daemonset.apps/yc-disk-csi-node                 0         0         0       0            0           <none>                                                                               3h19m
+kube-system   daemonset.apps/yc-disk-csi-node-v2              3         3         3       3            3           yandex.cloud/pci-topology=k8s                                                        3h19m
+
+NAMESPACE     NAME                                  READY   UP-TO-DATE   AVAILABLE   AGE
+kube-system   deployment.apps/coredns               2/2     2            2           3h19m
+kube-system   deployment.apps/kube-dns-autoscaler   1/1     1            1           3h19m
+kube-system   deployment.apps/metrics-server        1/1     1            1           3h19m
+
+NAMESPACE     NAME                                             DESIRED   CURRENT   READY   AGE
+kube-system   replicaset.apps/coredns-577d65f588               2         2         2       3h19m
+kube-system   replicaset.apps/kube-dns-autoscaler-697d688488   1         1         1       3h19m
+kube-system   replicaset.apps/metrics-server-66ddbc9fc5        0         0         0       3h19m
+kube-system   replicaset.apps/metrics-server-9f7b47c55         1         1         1       19m
+```
  - *Запустить микросервис phpmyadmin и подключиться к ранее созданной БД.
  - *Создать сервис-типы Load Balancer и подключиться к phpmyadmin. Предоставить скриншот с публичным адресом и подключением к БД.
+ Создал манифест деплоймента и сервиса. Столкнулся с проблемой, если в пароле используются спец-символы, аутентификация не проходит.
+ ```yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: phpmyadmin-deployment
+  labels:
+    app: phpmyadmin
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: phpmyadmin
+  template:
+    metadata:
+      labels:
+        app: phpmyadmin
+    spec:
+      containers:
+        - name: phpmyadmin
+          image: phpmyadmin/phpmyadmin
+          ports:
+            - containerPort: 80
+          env:
+            - name: PMA_HOST
+              value: "rc1a-jht0d619sr0rm739.mdb.yandexcloud.net"
+            - name: PMA_PORT
+              value: "3306"
+            - name: PMA_PMADB
+              value: "netology_db"
+            - name: PMA_USER
+              value: "dbuser"
+            - name: PMA_PASSWORD
+              value: "Password123"
 
-Полезные документы:
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: phpmyadmin-service
+spec:
+  type: LoadBalancer
+  selector:
+    app: phpmyadmin
+  ports:
+  - name: http
+    port: 80
+    targetPort: 80
 
-- [MySQL cluster](https://registry.terraform.io/providers/yandex-cloud/yandex/latest/docs/resources/mdb_mysql_cluster).
-- [Создание кластера Kubernetes](https://cloud.yandex.ru/docs/managed-kubernetes/operations/kubernetes-cluster/kubernetes-cluster-create)
-- [K8S Cluster](https://registry.terraform.io/providers/yandex-cloud/yandex/latest/docs/resources/kubernetes_cluster).
-- [K8S node group](https://registry.terraform.io/providers/yandex-cloud/yandex/latest/docs/resources/kubernetes_node_group).
+ ```
+```bash
+user@microk8s:~/clopro-homeworks-4$ kubectl get deployments.apps 
+NAME                    READY   UP-TO-DATE   AVAILABLE   AGE
+phpmyadmin-deployment   3/3     3            3           103m
+user@microk8s:~/clopro-homeworks-4$ kubectl get svc
+NAME                 TYPE           CLUSTER-IP      EXTERNAL-IP       PORT(S)        AGE
+kubernetes           ClusterIP      10.96.128.1     <none>            443/TCP        111m
+phpmyadmin-service   LoadBalancer   10.96.220.238   158.160.138.130   80:31843/TCP   103m
+user@microk8s:~/clopro-homeworks-4$ 
+```
+ 
 
---- 
-
-Полезные документы:
-
-- [Модуль EKS](https://learn.hashicorp.com/tutorials/terraform/eks).
-
-### Правила приёма работы
-
-Домашняя работа оформляется в своём Git репозитории в файле README.md. Выполненное домашнее задание пришлите ссылкой на .md-файл в вашем репозитории.
-Файл README.md должен содержать скриншоты вывода необходимых команд, а также скриншоты результатов.
-Репозиторий должен содержать тексты манифестов или ссылки на них в файле README.md.
