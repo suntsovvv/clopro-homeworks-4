@@ -569,5 +569,7 @@ kubernetes           ClusterIP      10.96.128.1     <none>            443/TCP   
 phpmyadmin-service   LoadBalancer   10.96.220.238   158.160.138.130   80:31843/TCP   103m
 user@microk8s:~/clopro-homeworks-4$ 
 ```
+![image](https://github.com/user-attachments/assets/d8645868-393e-461d-af2f-f0c506158ffd)
+
  
 
