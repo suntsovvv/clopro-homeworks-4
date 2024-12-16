@@ -570,6 +570,6 @@ phpmyadmin-service   LoadBalancer   10.96.220.238   158.160.138.130   80:31843/T
 user@microk8s:~/clopro-homeworks-4$ 
 ```
 ![image](https://github.com/user-attachments/assets/d8645868-393e-461d-af2f-f0c506158ffd)
-
+Ссылка на манифесты https://github.com/suntsovvv/clopro-homeworks-4/tree/main
  
 
